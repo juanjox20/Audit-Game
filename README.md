@@ -6,13 +6,13 @@
 - Export des données système en CSV
 - Compatible avec Windows 10/11
 - Visualisation automatique dans Excel
-# Prerequis 
+# Prérequis 
 - Windows avec PowerShell 5.1 ou supérieur
 - Droits administrateur pour certaines commandes (BitLocker, antivirus)
 # Installation
 - Copier le script Audit_Gameplon.ps1 sur le Bureau
 - Lancer le fichier lancer_audit.bat
-# Fichies Généres
+# Fichies Génères
 - processeur.csv
 - ram.csv
 - stockage.csv
