@@ -29,9 +29,37 @@ $ramModules = Get-CimInstance Win32_PhysicalMemory
 $ramTotal = ($ramModules | Measure-Object -Property Capacity -Sum).Sum
 $rapport["RAM (Go)"] = [math]::Round($ramTotal / 1GB, 2)
 
+# Type de RAM (via SMBIOSMemoryType avec fallback)
+$typesTraduits = @{
+    20 = "DDR"
+    21 = "DDR2"
+    22 = "DDR2 FB-DIMM"
+    24 = "DDR3"
+    25 = "DDR4"
+    26 = "DDR5"
+}
+$ramTypes = $ramModules | Select-Object -ExpandProperty SMBIOSMemoryType
+$typesDétectés = $ramTypes | ForEach-Object {
+    if ($typesTraduits.ContainsKey($_)) {
+        $typesTraduits[$_]
+    } else {
+        "Code inconnu ($_)"
+    }
+}
+$rapport["Type de RAM"] = ($typesDétectés | Sort-Object -Unique) -join ", "
+
 # Espace libre
 $disk = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object -First 1 FreeSpace
 $rapport["Espace libre (Go)"] = [math]::Round($disk.FreeSpace / 1GB, 2)
+
+# Type de disque (SSD ou HDD)
+try {
+    $disques = Get-PhysicalDisk | Select-Object -ExpandProperty MediaType
+    $typesDisques = ($disques | Sort-Object -Unique) -join ", "
+    $rapport["Type de disque"] = $typesDisques
+} catch {
+    $rapport["Type de disque"] = "Non disponible"
+}
 
 # Carte graphique
 $gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1 Name
@@ -82,6 +110,36 @@ $rapport["Connectivité Wi-Fi"] = if ($wifi) { "Oui" } else { "Non" }
 $bt = Get-PnpDevice | Where-Object { $_.FriendlyName -like "*Bluetooth*" -and $_.Status -eq "OK" }
 $rapport["Bluetooth activé"] = if ($bt) { "Oui" } else { "Non" }
 
+# Fonction version générique
+function Get-AppVersion($nomExe) {
+    $chemin = Get-ChildItem "C:\Program Files*", "C:\Program Files (x86)*" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq $nomExe } |
+        Select-Object -First 1 -ExpandProperty FullName
+    if ($chemin) {
+        (Get-Item $chemin).VersionInfo.ProductVersion
+    } else {
+        "Non installé"
+    }
+}
+
+# Version Discord (via AppData\Local\Discord)
+function Get-DiscordVersion {
+    $basePath = Join-Path $env:LOCALAPPDATA "Discord"
+    if (Test-Path $basePath) {
+        $exe = Get-ChildItem -Path $basePath -Recurse -Filter "Discord.exe" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($exe) {
+            return (Get-Item $exe.FullName).VersionInfo.ProductVersion
+        }
+    }
+    return "Non installé"
+}
+
+$rapport["Version Discord"] = Get-DiscordVersion
+$rapport["Version Steam"] = Get-AppVersion "Steam.exe"
+$rapport["Version Edge"] = Get-AppVersion "msedge.exe"
+
 # Ordre des colonnes
 $ordreColonnes = @(
     "Nom du poste",
@@ -95,6 +153,8 @@ $ordreColonnes = @(
     "Fréquence (GHz)",
     "Nombre de cœurs physiques",
     "RAM (Go)",
+    "Type de RAM",
+    "Type de disque",
     "Espace libre (Go)",
     "Carte graphique principale",
     "Antivirus",
@@ -105,7 +165,10 @@ $ordreColonnes = @(
     "Adresse MAC",
     "Adresse IP locale",
     "Connectivité Wi-Fi",
-    "Bluetooth activé"
+    "Bluetooth activé",
+    "Version Discord",
+    "Version Steam",
+    "Version Edge"
 )
 
 # Créer l’objet final avec colonnes ordonnées
