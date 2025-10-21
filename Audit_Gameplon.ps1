@@ -1,174 +1,155 @@
-# === Audit Gameplon : Résumé machine complet ===
+# === Audit Gameplon : Script complet et ordonné ===
 
-# Initialiser un dictionnaire flexible
 $rapport = @{}
 
-# Identité machine
-$rapport["Nom du poste"] = $env:COMPUTERNAME
-$rapport["Nom d'utilisateur"] = $env:USERNAME
-
-# OS
-$os = Get-CimInstance Win32_OperatingSystem
-$rapport["Type et nom OS"] = $os.Caption
-$rapport["Version OS"] = $os.Version
-$rapport["Build OS"] = $os.BuildNumber
-$rapport["Date OS"] = $os.InstallDate.ToString("dd/MM/yyyy")
-
-# Numéro de série
-$bios = Get-CimInstance Win32_BIOS
-$rapport["Numéro de série matériel"] = $bios.SerialNumber
-
-# Processeur
-$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, MaxClockSpeed, NumberOfCores
-$rapport["Processeur principal"] = $cpu.Name
-$rapport["Fréquence (GHz)"] = [math]::Round($cpu.MaxClockSpeed / 1000, 2)
-$rapport["Nombre de cœurs physiques"] = $cpu.NumberOfCores
-
-# RAM
-$ramModules = Get-CimInstance Win32_PhysicalMemory
-$ramTotal = ($ramModules | Measure-Object -Property Capacity -Sum).Sum
-$rapport["RAM (Go)"] = [math]::Round($ramTotal / 1GB, 2)
-
-# Type de RAM (via SMBIOSMemoryType avec fallback)
-$typesTraduits = @{
-    20 = "DDR"
-    21 = "DDR2"
-    22 = "DDR2 FB-DIMM"
-    24 = "DDR3"
-    25 = "DDR4"
-    26 = "DDR5"
-}
-$ramTypes = $ramModules | Select-Object -ExpandProperty SMBIOSMemoryType
-$typesDétectés = $ramTypes | ForEach-Object {
-    if ($typesTraduits.ContainsKey($_)) {
-        $typesTraduits[$_]
-    } else {
-        "Code inconnu ($_)"
-    }
-}
-$rapport["Type de RAM"] = ($typesDétectés | Sort-Object -Unique) -join ", "
-
-# Espace libre
-$disk = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object -First 1 FreeSpace
-$rapport["Espace libre (Go)"] = [math]::Round($disk.FreeSpace / 1GB, 2)
-
-# Type de disque (SSD ou HDD)
-try {
-    $disques = Get-PhysicalDisk | Select-Object -ExpandProperty MediaType
-    $typesDisques = ($disques | Sort-Object -Unique) -join ", "
-    $rapport["Type de disque"] = $typesDisques
-} catch {
-    $rapport["Type de disque"] = "Non disponible"
-}
-
-# Carte graphique
-$gpu = Get-CimInstance Win32_VideoController | Select-Object -First 1 Name
-$rapport["Carte graphique principale"] = $gpu.Name
-
-# Antivirus
-try {
-    $av = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | Select-Object -First 1 displayName
-    $rapport["Antivirus"] = $av.displayName
-} catch {
-    $rapport["Antivirus"] = "Accès refusé"
-}
-
-# BitLocker
-try {
-    $bl = Get-BitLockerVolume | Select-Object -First 1 ProtectionStatus
-    $rapport["BitLocker actif"] = if ($bl.ProtectionStatus -eq "On") { "Oui" } else { "Non" }
-} catch {
-    $rapport["BitLocker actif"] = "Erreur"
-}
-
-# TPM
-$tpmClass = Get-WmiObject -Namespace "root\CIMv2\Security\MicrosoftTpm" -Class "Win32_Tpm" -ErrorAction SilentlyContinue
-if ($tpmClass) {
-    $rapport["TPM activé"] = if ($tpmClass.IsActivated_InitialValue) { "Oui" } else { "Non" }
-} else {
-    $rapport["TPM activé"] = "Non détecté"
-}
-
-# Secure Boot
-try {
-    $rapport["Secure Boot"] = if (Confirm-SecureBootUEFI) { "Oui" } else { "Non" }
-} catch {
-    $rapport["Secure Boot"] = "Non disponible"
-}
-
-# Réseau
-$net = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1 Name, MacAddress
-$ip = Get-NetIPAddress | Where-Object { $_.AddressFamily -eq "IPv4" -and $_.PrefixOrigin -eq "Dhcp" } | Select-Object -First 1 IPAddress
-$rapport["Chipset réseau"] = $net.Name
-$rapport["Adresse MAC"] = $net.MacAddress
-$rapport["Adresse IP locale"] = $ip.IPAddress
-
-# Wi-Fi / Bluetooth
-$wifi = Get-NetAdapter | Where-Object { $_.Name -like "*Wi-Fi*" }
-$rapport["Connectivité Wi-Fi"] = if ($wifi) { "Oui" } else { "Non" }
-
-$bt = Get-PnpDevice | Where-Object { $_.FriendlyName -like "*Bluetooth*" -and $_.Status -eq "OK" }
-$rapport["Bluetooth activé"] = if ($bt) { "Oui" } else { "Non" }
-
-# Fonction version générique
-function Get-AppVersion($nomExe) {
-    $chemin = Get-ChildItem "C:\Program Files*", "C:\Program Files (x86)*" -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq $nomExe } |
-        Select-Object -First 1 -ExpandProperty FullName
-    if ($chemin) {
-        (Get-Item $chemin).VersionInfo.ProductVersion
-    } else {
-        "Non installé"
+# Fonctions
+function Get-AppVersion($exeName) {
+    try {
+        $paths = @("C:\Program Files", "C:\Program Files (x86)")
+        foreach ($path in $paths) {
+            $exe = Get-ChildItem -Path $path -Filter $exeName -Depth 2 -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($exe) {
+                return (Get-Item $exe.FullName).VersionInfo.ProductVersion
+            }
+        }
+        return "Non installé"
+    } catch {
+        return "Erreur"
     }
 }
 
-# Version Discord (via AppData\Local\Discord)
 function Get-DiscordVersion {
-    $basePath = Join-Path $env:LOCALAPPDATA "Discord"
-    if (Test-Path $basePath) {
-        $exe = Get-ChildItem -Path $basePath -Recurse -Filter "Discord.exe" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
+    try {
+        $basePath = Join-Path $env:LOCALAPPDATA "Discord"
+        if (Test-Path $basePath) {
+            $exe = Get-ChildItem -Path $basePath -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($exe) {
+                return (Get-Item $exe.FullName).VersionInfo.ProductVersion
+            }
+        }
+        return "Non installé"
+    } catch {
+        return "Erreur"
+    }
+}
+
+function Get-OBSVersion {
+    try {
+        $exe = Get-ChildItem "C:\Program Files*", "C:\Program Files (x86)*" -Filter "obs64.exe" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($exe) {
             return (Get-Item $exe.FullName).VersionInfo.ProductVersion
         }
+        return "Non installé"
+    } catch {
+        return "Erreur"
     }
-    return "Non installé"
 }
 
-$rapport["Version Discord"] = Get-DiscordVersion
-$rapport["Version Steam"] = Get-AppVersion "Steam.exe"
-$rapport["Version Edge"] = Get-AppVersion "msedge.exe"
+function Get-EdgeVersion {
+    try {
+        $exe = Get-ChildItem "C:\Program Files (x86)\Microsoft\Edge\Application" -Filter "msedge.exe" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($exe) {
+            return (Get-Item $exe.FullName).VersionInfo.ProductVersion
+        }
+        return "Non installé"
+    } catch {
+        return "Erreur"
+    }
+}
+
+# Prétraitement des blocs sensibles
+$typesTraduits = @{ 20="DDR"; 21="DDR2"; 22="DDR2 FB-DIMM"; 24="DDR3"; 25="DDR4"; 26="DDR5" }
+$ramTypes = Get-CimInstance Win32_PhysicalMemory | Select-Object -ExpandProperty SMBIOSMemoryType
+$ramTypeFinal = ($ramTypes | ForEach-Object { $typesTraduits[$_] }) -join ", "
+
+try { $media = Get-PhysicalDisk | Select-Object -ExpandProperty MediaType; $diskType = ($media | Sort-Object -Unique) -join ", " } catch { $diskType = "Non disponible" }
+try { $antivirus = (Get-CimInstance -Namespace root/SecurityCenter2 -Class AntiVirusProduct | Select-Object -First 1).displayName } catch { $antivirus = "Accès refusé" }
+try { $bitlocker = if ((Get-BitLockerVolume | Select-Object -First 1).ProtectionStatus -eq "On") { "Oui" } else { "Non" } } catch { $bitlocker = "Erreur" }
+$tpm = Get-WmiObject -Namespace "root\CIMv2\Security\MicrosoftTpm" -Class "Win32_Tpm" -ErrorAction SilentlyContinue
+$tpmStatus = if ($tpm) { if ($tpm.IsActivated_InitialValue) { "Oui" } else { "Non" } } else { "Non détecté" }
+try { $secureBoot = if (Confirm-SecureBootUEFI) { "Oui" } else { "Non" } } catch { $secureBoot = "Non disponible" }
+
+$navFinal = @()
+foreach ($exe in @("msedge.exe", "chrome.exe", "firefox.exe")) {
+    $found = Get-ChildItem "C:\Program Files*", "C:\Program Files (x86)*" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq $exe } | Select-Object -First 1
+    if ($found) {
+        $navFinal += $exe.Replace(".exe", "")
+    }
+}
+$navFinal = if ($navFinal.Count -gt 0) { $navFinal -join ", " } else { "Non détecté" }
+
+try { $disabledTasks = (Get-ScheduledTask | Where-Object { $_.State -eq "Disabled" }).Count } catch { $disabledTasks = "Erreur" }
+try {
+    $shortProc = Get-Process | Where-Object { $_.CPU -lt 0.1 -and $_.CPU -ne $null }
+    $shortProcList = ($shortProc | Select-Object -ExpandProperty Name | Sort-Object -Unique) -join ", "
+} catch { $shortProcList = "Erreur" }
+
+# Construction du rapport
+$rapport = @{
+    "Nom du poste" = $env:COMPUTERNAME
+    "Nom d'utilisateur" = $env:USERNAME
+    "Type et nom OS" = (Get-CimInstance Win32_OperatingSystem).Caption
+    "Version OS" = (Get-CimInstance Win32_OperatingSystem).Version
+    "Build OS" = (Get-CimInstance Win32_OperatingSystem).BuildNumber
+    "Date OS" = (Get-CimInstance Win32_OperatingSystem).InstallDate.ToString("dd/MM/yyyy")
+    "Numéro de série matériel" = (Get-CimInstance Win32_BIOS).SerialNumber
+    "UUID matériel" = (Get-CimInstance Win32_ComputerSystemProduct).UUID
+    "Processeur principal" = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+    "Fréquence (GHz)" = [math]::Round((Get-CimInstance Win32_Processor | Select-Object -First 1).MaxClockSpeed / 1000, 2)
+    "Nombre de cœurs physiques" = (Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfCores
+    "RAM (Go)" = [math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1GB, 2)
+    "Type de RAM" = $ramTypeFinal
+    "Type de disque" = $diskType
+    "Espace libre (Go)" = [math]::Round((Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object -First 1).FreeSpace / 1GB, 2)
+    "Carte graphique principale" = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name
+    "Antivirus" = $antivirus
+    "BitLocker actif" = $bitlocker
+    "TPM activé" = $tpmStatus
+    "Secure Boot" = $secureBoot
+    "Chipset réseau" = (Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1).Name
+    "Adresse MAC" = (Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1).MacAddress
+    "Adresse IP locale" = (Get-NetIPAddress | Where-Object { $_.AddressFamily -eq "IPv4" -and $_.PrefixOrigin -eq "Dhcp" } | Select-Object -First 1).IPAddress
+    "Connectivité Wi-Fi" = if (Get-NetAdapter | Where-Object { $_.Name -like "*Wi-Fi*" }) { "Oui" } else { "Non" }
+    "Bluetooth activé" = if (Get-PnpDevice | Where-Object { $_.FriendlyName -like "*Bluetooth*" -and $_.Status -eq "OK" }) { "Oui" } else { "Non" }
+    "Version Discord" = Get-DiscordVersion
+    "Version Steam" = Get-AppVersion "Steam.exe"
+    "Version Edge" = Get-EdgeVersion
+    "Version OBS Studio" = Get-OBSVersion
+    "Version QRS Studio" = Get-AppVersion "QRSStudio.exe"
+    "Navigateur Web" = $navFinal
+    "Tâches identifiées annulées" = $disabledTasks
+    "Processus courts identifiés" = $shortProcList
+}
+
+# Observations
+$rapport["Observations"] = if ($rapport["Antivirus"] -eq "Accès refusé") {
+    "Antivirus non détecté"
+} elseif ($rapport["BitLocker actif"] -eq "Non") {
+    "BitLocker désactivé"
+} else {
+    "RAS"
+}
+
+# Niveau de conformité
+$conformite = 5
+if ($rapport["Antivirus"] -eq "Accès refusé") { $conformite -= 1 }
+if ($rapport["BitLocker actif"] -eq "Non") { $conformite -= 1 }
+if ($rapport["TPM activé"] -eq "Non détecté") { $conformite -=  1 }
+$rapport["Niveau de conformité (sur 5)"] = $conformite
 
 # Ordre des colonnes
 $ordreColonnes = @(
-    "Nom du poste",
-    "Nom d'utilisateur",
-    "Type et nom OS",
-    "Version OS",
-    "Build OS",
-    "Date OS",
-    "Numéro de série matériel",
-    "Processeur principal",
-    "Fréquence (GHz)",
-    "Nombre de cœurs physiques",
-    "RAM (Go)",
-    "Type de RAM",
-    "Type de disque",
-    "Espace libre (Go)",
-    "Carte graphique principale",
-    "Antivirus",
-    "BitLocker actif",
-    "TPM activé",
-    "Secure Boot",
-    "Chipset réseau",
-    "Adresse MAC",
-    "Adresse IP locale",
-    "Connectivité Wi-Fi",
-    "Bluetooth activé",
-    "Version Discord",
-    "Version Steam",
-    "Version Edge"
+    "Nom du poste", "Nom d'utilisateur", "Type et nom OS", "Version OS", "Build OS", "Date OS",
+    "Numéro de série matériel", "UUID matériel", "Processeur principal", "Fréquence (GHz)", "Nombre de cœurs physiques",
+    "RAM (Go)", "Type de RAM", "Type de disque", "Espace libre (Go)", "Carte graphique principale",
+    "Antivirus", "BitLocker actif", "TPM activé", "Secure Boot",
+    "Chipset réseau", "Adresse MAC", "Adresse IP locale", "Connectivité Wi-Fi", "Bluetooth activé",    "Version Discord", "Version Steam", "Version Edge", "Version QRS Studio", "Navigateur Web",
+    "Tâches identifiées annulées", "Processus courts identifiés", "Observations", "Niveau de conformité (sur 5)"
 )
 
 # Créer l’objet final avec colonnes ordonnées
