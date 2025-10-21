@@ -96,7 +96,7 @@ $rapport = @{
     "Type et nom OS" = (Get-CimInstance Win32_OperatingSystem).Caption
     "Version OS" = (Get-CimInstance Win32_OperatingSystem).Version
     "Build OS" = (Get-CimInstance Win32_OperatingSystem).BuildNumber
-    "Date OS" = (Get-CimInstance Win32_OperatingSystem).InstallDate.ToString("dd/MM/yyyy")
+    "Date d'audit" = (Get-Date).ToString("dd/MM/yyyy")
     "Numéro de série matériel" = (Get-CimInstance Win32_BIOS).SerialNumber
     "UUID matériel" = (Get-CimInstance Win32_ComputerSystemProduct).UUID
     "Processeur principal" = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
@@ -119,8 +119,7 @@ $rapport = @{
     "Version Discord" = Get-DiscordVersion
     "Version Steam" = Get-AppVersion "Steam.exe"
     "Version Edge" = Get-EdgeVersion
-    "Version OBS Studio" = Get-OBSVersion
-    "Version QRS Studio" = Get-AppVersion "QRSStudio.exe"
+    "Version OBS Studio" = Get-AppVersion "QRSStudio.exe"
     "Navigateur Web" = $navFinal
     "Tâches identifiées annulées" = $disabledTasks
     "Processus courts identifiés" = $shortProcList
@@ -144,7 +143,7 @@ $rapport["Niveau de conformité (sur 5)"] = $conformite
 
 # Ordre des colonnes
 $ordreColonnes = @(
-    "Nom du poste", "Nom d'utilisateur", "Type et nom OS", "Version OS", "Build OS", "Date OS",
+    "Nom du poste", "Nom d'utilisateur", "Date d'audit", "Version OS", "Build OS", "Type et nom OS",
     "Numéro de série matériel", "UUID matériel", "Processeur principal", "Fréquence (GHz)", "Nombre de cœurs physiques",
     "RAM (Go)", "Type de RAM", "Type de disque", "Espace libre (Go)", "Carte graphique principale",
     "Antivirus", "BitLocker actif", "TPM activé", "Secure Boot",
